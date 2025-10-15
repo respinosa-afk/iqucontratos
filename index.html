@@ -67,6 +67,53 @@
         const CONTRACTS_COLLECTION_PATH = `artifacts/${appId}/public/data/${CONTRACTS_COLLECTION_NAME}`;
         // ---------------------------------------------
 
+        // --- DEFINICIÓN DE MÚLTIPLES CONTRATOS (NUEVO) ---
+        const CONTRACT_OPTIONS = [
+            {
+                id: 'anexo_contrato',
+                title: '1. ANEXO CONTRATO DE OBRA',
+                text: `
+ANEXO CONTRATO DE TRABAJO (TIPO OBRA ESPECÍFICA)
+
+En Colina, a [FECHA ACTUAL], entre la Empresa IQU SPA, R.U.T. 76091270-0, representada en este acto por don(a) JORGE CORREAL cédula de identidad N° 6539973-3, en adelante "El Empleador" y don(a) [NOMBRE DEL FIRMANTE], cédula de identidad N°[RUT DEL FIRMANTE] en adelante "El Trabajador", se ha convenido el siguiente cambio al contrato de trabajo:
+
+Obra o Faena transitoria específica a desarrollar:
+El trabajador se compromete a realizar la labor de Supervisor De Obra, en dependencias de Km. 445 Ruta 5 Sur, Comuna de Pemuco, Chillan.
+
+Las demás cláusulas se mantienen sin alteración alguna.
+`.trim()
+            },
+            {
+                id: 'acuerdo_confidencialidad',
+                title: '2. ACUERDO DE CONFIDENCIALIDAD (NDA)',
+                text: `
+ACUERDO DE NO DIVULGACIÓN (NDA)
+
+Yo, [NOMBRE DEL FIRMANTE], con identificación N°[RUT DEL FIRMANTE], reconozco que durante mi relación con IQU SPA, tendré acceso a información confidencial y propietaria. Me comprometo a no divulgar, copiar o usar, directa o indirectamente, dicha información para ningún propósito que no sea el desempeño de mis funciones laborales. Este acuerdo es de carácter indefinido, incluso después de la terminación de mi relación laboral.
+
+Fecha de Aceptación: [FECHA ACTUAL]
+
+Atentamente,
+[NOMBRE DEL FIRMANTE]
+`.trim()
+            },
+            {
+                id: 'politica_vacaciones',
+                title: '3. POLÍTICA DE VACACIONES 2026',
+                text: `
+POLÍTICA DE VACACIONES ANUALES 2026
+
+El presente documento certifica que [NOMBRE DEL FIRMANTE], RUT N°[RUT DEL FIRMANTE], ha sido informado y acepta la nueva Política Interna de Vacaciones de IQU SPA para el periodo 2026. Esta política establece que la solicitud de vacaciones debe realizarse con un mínimo de 30 días de antelación y está sujeta a la aprobación del jefe directo, priorizando la continuidad operacional.
+
+Acepto haber recibido y entendido el documento.
+
+[FECHA ACTUAL]
+`.trim()
+            }
+        ];
+        // ---------------------------------------------------
+
+
         const { useState, useEffect, useRef, useCallback } = React;
 
         // Componente principal de la aplicación (Declarado como función pura)
@@ -83,24 +130,28 @@
             const [signerRut, setSignerRut] = useState('');
             const [isDrawing, setIsDrawing] = useState(false);
             const [lastPosition, setLastPosition] = useState({ x: 0, y: 0 });
-
-            // Contrato estático (el usuario lo edita directamente aquí)
-            const contractText = `
-ANEXO CONTRATO DE TRABAJO (GUARDADO EN BASE DE DATOS)
-
-En Colina, a 21 de Octubre de 2025, entre la Empresa IQU SPA, R.U.T. 76091270-0, representada en este acto por don(a) JORGE CORREAL cédula de identidad N° 6539973-3, en adelante "El Empleador" y don(a) [NOMBRE DEL FIRMANTE], cédula de identidad N°[RUT DEL FIRMANTE] en adelante "El Trabajador", se ha convenido el siguiente cambio al contrato de trabajo:
-
-Obra o Faena transitoria específica a desarrollar:
-El trabajador se compromete a realizar la labor de Supervisor De Obra, en dependencias de Km. 445 Ruta 5 Sur, Comuna de Pemuco, Chillan.
-
-Las demás cláusulas se mantienen sin alteración alguna.
-            `.trim();
+            
+            // --- NUEVOS ESTADOS PARA CONTRATOS ---
+            const [selectedContractId, setSelectedContractId] = useState(CONTRACT_OPTIONS[0].id);
+            const [contractText, setContractText] = useState(CONTRACT_OPTIONS[0].text);
+            const [contractTitle, setContractTitle] = useState(CONTRACT_OPTIONS[0].title);
+            // -----------------------------------
 
             // Función para mostrar mensajes de estado
             const showMessage = useCallback((text, type = 'blue', duration = 5000) => {
                 setMessage({ text, type });
                 setTimeout(() => setMessage(null), duration);
             }, []);
+            
+            // Efecto para actualizar el contrato cuando cambia la selección
+            useEffect(() => {
+                const contract = CONTRACT_OPTIONS.find(c => c.id === selectedContractId);
+                if (contract) {
+                    setContractText(contract.text);
+                    setContractTitle(contract.title);
+                }
+            }, [selectedContractId]);
+
 
             // 1. Inicialización de Firebase y Autenticación
             useEffect(() => {
@@ -281,6 +332,7 @@ Las demás cláusulas se mantienen sin alteración alguna.
                     // 1. GUARDADO EN FIRESTORE (Solo si la DB está lista)
                     if (isDbReady && db && db.collection) {
                         const contractData = {
+                            contractTitle: contractTitle, // NUEVO: Título del contrato
                             signerName: signerName.trim(),
                             signerRut: signerRut.trim(),
                             signedAt: new Date().toISOString(),
@@ -298,6 +350,7 @@ Las demás cláusulas se mantienen sin alteración alguna.
                     // 2. GENERACIÓN Y DESCARGA DEL PNG
                     const name = signerName.trim();
                     const rut = signerRut.trim();
+                    const dateSigned = new Date().toLocaleString('es-CL');
 
                     const docCanvas = document.createElement('canvas');
                     docCanvas.width = 1000;
@@ -309,17 +362,19 @@ Las demás cláusulas se mantienen sin alteración alguna.
                     docCtx.fillStyle = '#000000';
                     
                     // Título y Metadata
-                    docCtx.fillText('ANEXO DE CONTRATO FIRMADO', 50, 50);
+                    docCtx.fillText(contractTitle, 50, 50); // Usamos el título del contrato seleccionado
                     docCtx.font = '16px Inter, sans-serif';
                     docCtx.fillText(`Firmante: ${name}`, 50, 90);
                     docCtx.fillText(`RUT/ID: ${rut}`, 50, 115);
-                    docCtx.fillText(`Fecha de Firma: ${new Date().toLocaleString('es-CL')}`, 50, 140);
+                    docCtx.fillText(`Fecha de Firma: ${dateSigned}`, 50, 140);
                     
                     // Contenido del Contrato
                     docCtx.font = '14px Inter, sans-serif';
+                    // Reemplazar placeholders comunes en el texto
                     const textToDraw = contractText
                         .replace('[NOMBRE DEL FIRMANTE]', name)
-                        .replace('[RUT DEL FIRMANTE]', rut);
+                        .replace('[RUT DEL FIRMANTE]', rut)
+                        .replace('[FECHA ACTUAL]', dateSigned.split(',')[0]); // Solo la fecha, no la hora
 
                     let lastY = wrapText(docCtx, textToDraw, 50, 180, docCanvas.width - 100, 20);
 
@@ -342,7 +397,7 @@ Las demás cláusulas se mantienen sin alteración alguna.
 
                         // Descargar el documento final
                         const link = document.createElement('a');
-                        link.download = `Contrato_Firmado_${name.replace(/\s/g, '_')}_${Date.now()}.png`;
+                        link.download = `${contractTitle.replace(/\s/g, '_')}_${name.replace(/\s/g, '_')}_${Date.now()}.png`;
                         link.href = docCanvas.toDataURL('image/png');
                         document.body.appendChild(link);
                         link.click();
@@ -354,6 +409,7 @@ Las demás cláusulas se mantienen sin alteración alguna.
                         handleClear();
                         
                         setLoading(false);
+                        showMessage(`¡Descarga del contrato "${contractTitle}" completada!`, 'green', 5000);
                     };
                     signatureImg.src = signatureData;
 
@@ -378,15 +434,16 @@ Las demás cláusulas se mantienen sin alteración alguna.
             // Contenido del contrato con placeholders reemplazados (para la vista)
             const displayContractText = contractText
                 .replace('[NOMBRE DEL FIRMANTE]', signerName || '__________________')
-                .replace('[RUT DEL FIRMANTE]', signerRut || '__________________');
+                .replace('[RUT DEL FIRMANTE]', signerRut || '__________________')
+                .replace('[FECHA ACTUAL]', new Date().toLocaleDateString('es-CL'));
 
 
             return (
                 <div className="max-w-4xl mx-auto bg-white p-6 sm:p-8 rounded-xl shadow-2xl border border-gray-100">
                     
                     <header className="text-center mb-8">
-                        <h1 className="text-3xl font-bold text-gray-800">Sistema de Firma: Guardado Centralizado y Descarga</h1>
-                        <p className="text-gray-500 mt-2">Los documentos firmados se guardan automáticamente en la base de datos Y se descargan para el firmante.</p>
+                        <h1 className="text-3xl font-bold text-gray-800">Sistema de Firma: Múltiples Contratos</h1>
+                        <p className="text-gray-500 mt-2">Seleccione el documento a firmar, complete los datos y use el *mouse* o el dedo para la firma.</p>
                         {MessageComponent}
                         {userId && <p className="text-xs text-gray-400 mt-2">ID de Sesión: {userId}</p>}
                         
@@ -397,18 +454,37 @@ Las demás cláusulas se mantienen sin alteración alguna.
                             </div>
                         )}
                     </header>
+                    
+                    {/* SELECCIÓN DE CONTRATO (NUEVO) */}
+                    <div className="mb-8">
+                        <h2 className="text-xl font-semibold mb-3 text-gray-700">1. Seleccionar Documento</h2>
+                        <select
+                            id="contractSelector"
+                            value={selectedContractId}
+                            onChange={(e) => {
+                                setSelectedContractId(e.target.value);
+                                handleClear(); // Limpia la firma al cambiar de contrato
+                            }}
+                            className="w-full p-3 border border-gray-300 rounded-lg focus:ring-blue-500 focus:border-blue-500 text-base bg-white" 
+                            disabled={loading}
+                        >
+                            {CONTRACT_OPTIONS.map(option => (
+                                <option key={option.id} value={option.id}>{option.title}</option>
+                            ))}
+                        </select>
+                    </div>
 
                     {/* Contenedor del Contrato */}
                     <div className="mb-8">
-                        <h2 className="text-xl font-semibold mb-3 text-gray-700">1. Contenido del Documento</h2>
+                        <h2 className="text-xl font-semibold mb-3 text-gray-700">{contractTitle} (Vista Previa)</h2>
                         <div className="contract-content rounded-lg p-4 bg-gray-50 text-justify text-sm leading-relaxed max-h-60 overflow-y-auto">
-                            <pre className="text-sm text-gray-800 leading-relaxed font-sans">{displayContractText}</pre>
+                            <pre className="text-sm text-gray-800 leading-relaxed font-sans whitespace-pre-wrap">{displayContractText}</pre>
                         </div>
                     </div>
 
                     {/* Sección de Datos y Firma */}
                     <div className="mb-8 p-4 bg-blue-50 rounded-xl border border-blue-200">
-                        <h2 className="text-xl font-semibold mb-4 text-blue-700">2. Complete y Firme</h2>
+                        <h2 className="text-xl font-semibold mb-4 text-blue-700">3. Complete y Firme</h2>
                         
                         {/* Campos a Llenar */}
                         <div className="flex flex-col md:flex-row gap-4 mb-6">
@@ -435,7 +511,7 @@ Las demás cláusulas se mantienen sin alteración alguna.
                         </div>
                         
                         {/* Canvas de Firma */}
-                        <p className="text-sm text-gray-600 mt-4 mb-2">3. Use el mouse o el dedo para firmar dentro del recuadro:</p>
+                        <p className="text-sm text-gray-600 mt-4 mb-2">4. Use el mouse o el dedo para firmar dentro del recuadro:</p>
                         <canvas 
                             ref={canvasRef} 
                             id="signatureCanvas" 
