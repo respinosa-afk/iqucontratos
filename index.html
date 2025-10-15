@@ -56,7 +56,8 @@
         const getAuth = (app) => window.firebase && window.firebase.auth(app);
         
         // Funciones simplificadas para Firebase V8
-        const CONTRACTS_COLLECTION_NAME = "contracts_signed";
+        const CONTRACTS_COLLECTION_NAME = "pending_contracts";
+        const SIGNED_COLLECTION_NAME = "signed_contracts";
         
         // --- ADAPTACIÓN DE CONSTANTES PARA GITHUB PAGES ---
         const appId = 'net-app-default';
@@ -64,138 +65,67 @@
         const initialAuthToken = null;
         
         // Rutas de almacenamiento
-        const CONTRACTS_COLLECTION_PATH = `artifacts/${appId}/public/data/${CONTRACTS_COLLECTION_NAME}`;
+        const PENDING_CONTRACTS_PATH = `artifacts/${appId}/public/data/${CONTRACTS_COLLECTION_NAME}`;
+        const SIGNED_CONTRACTS_PATH = `artifacts/${appId}/public/data/${SIGNED_COLLECTION_NAME}`;
         // ---------------------------------------------
-
-        // --- DEFINICIÓN DE MÚLTIPLES CONTRATOS (NUEVO) ---
-        const CONTRACT_OPTIONS = [
-            {
-                id: 'anexo_contrato',
-                title: '1. ANEXO CONTRATO DE OBRA',
-                text: `
-ANEXO CONTRATO DE TRABAJO (TIPO OBRA ESPECÍFICA)
-
-En Colina, a [FECHA ACTUAL], entre la Empresa IQU SPA, R.U.T. 76091270-0, representada en este acto por don(a) JORGE CORREAL cédula de identidad N° 6539973-3, en adelante "El Empleador" y don(a) [NOMBRE DEL FIRMANTE], cédula de identidad N°[RUT DEL FIRMANTE] en adelante "El Trabajador", se ha convenido el siguiente cambio al contrato de trabajo:
-
-Obra o Faena transitoria específica a desarrollar:
-El trabajador se compromete a realizar la labor de Supervisor De Obra, en dependencias de Km. 445 Ruta 5 Sur, Comuna de Pemuco, Chillan.
-
-Las demás cláusulas se mantienen sin alteración alguna.
-`.trim()
-            },
-            {
-                id: 'acuerdo_confidencialidad',
-                title: '2. ACUERDO DE CONFIDENCIALIDAD (NDA)',
-                text: `
-ACUERDO DE NO DIVULGACIÓN (NDA)
-
-Yo, [NOMBRE DEL FIRMANTE], con identificación N°[RUT DEL FIRMANTE], reconozco que durante mi relación con IQU SPA, tendré acceso a información confidencial y propietaria. Me comprometo a no divulgar, copiar o usar, directa o indirectamente, dicha información para ningún propósito que no sea el desempeño de mis funciones laborales. Este acuerdo es de carácter indefinido, incluso después de la terminación de mi relación laboral.
-
-Fecha de Aceptación: [FECHA ACTUAL]
-
-Atentamente,
-[NOMBRE DEL FIRMANTE]
-`.trim()
-            },
-            {
-                id: 'politica_vacaciones',
-                title: '3. POLÍTICA DE VACACIONES 2026',
-                text: `
-POLÍTICA DE VACACIONES ANUALES 2026
-
-El presente documento certifica que [NOMBRE DEL FIRMANTE], RUT N°[RUT DEL FIRMANTE], ha sido informado y acepta la nueva Política Interna de Vacaciones de IQU SPA para el periodo 2026. Esta política establece que la solicitud de vacaciones debe realizarse con un mínimo de 30 días de antelación y está sujeta a la aprobación del jefe directo, priorizando la continuidad operacional.
-
-Acepto haber recibido y entendido el documento.
-
-[FECHA ACTUAL]
-`.trim()
-            }
-        ];
-        // ---------------------------------------------------
-
 
         const { useState, useEffect, useRef, useCallback } = React;
 
-        // Componente principal de la aplicación (Declarado como función pura)
-        function App() {
-            const canvasRef = useRef(null);
-            const [db, setDb] = useState(null);
-            const [userId, setUserId] = useState(null);
-            const [isDbReady, setIsDbReady] = useState(false);
-            const [loading, setLoading] = useState(true);
-            const [message, setMessage] = useState(null);
+        // --- COMPONENTE ADMIN Y SIGNER (NUEVO) ---
+        
+        // Utilidad: Reemplaza placeholders en el texto
+        const replacePlaceholders = (text, name, rut, date) => {
+            return text
+                .replace(/\[NOMBRE DEL FIRMANTE\]/g, name || '__________________')
+                .replace(/\[RUT DEL FIRMANTE\]/g, rut || '__________________')
+                .replace(/\[FECHA ACTUAL\]/g, date || '__________________');
+        };
 
-            // Estado del formulario
-            const [signerName, setSignerName] = useState('');
-            const [signerRut, setSignerRut] = useState('');
+        // Utilidad: Canvas Helper (para dibujar)
+        const wrapText = (context, text, x, y, maxWidth, lineHeight) => {
+            const words = text.split(' ');
+            let line = '';
+            let lineY = y;
+
+            for(let n = 0; n < words.length; n++) {
+                const testLine = line + words[n] + ' ';
+                const metrics = context.measureText(testLine);
+                const testWidth = metrics.width;
+                if (testWidth > maxWidth && n > 0) {
+                    context.fillText(line, x, lineY);
+                    line = words[n] + ' ';
+                    lineY += lineHeight;
+                } else {
+                    line = testLine;
+                }
+            }
+            context.fillText(line, x, lineY);
+            return lineY;
+        };
+
+        // Componente: Vista del FIRMANTE
+        function SignerView({ db, isDbReady, userId, initialData, showMessage, setLoading, loading }) {
+            const canvasRef = useRef(null);
+            const [signerName, setSignerName] = useState(initialData.signerName || '');
+            const [signerRut, setSignerRut] = useState(initialData.signerRut || '');
             const [isDrawing, setIsDrawing] = useState(false);
             const [lastPosition, setLastPosition] = useState({ x: 0, y: 0 });
+            const [documentText, setDocumentText] = useState(initialData.contractText || 'Cargando...');
+            const [documentTitle, setDocumentTitle] = useState(initialData.contractTitle || 'Documento');
             
-            // --- NUEVOS ESTADOS PARA CONTRATOS ---
-            const [selectedContractId, setSelectedContractId] = useState(CONTRACT_OPTIONS[0].id);
-            const [contractText, setContractText] = useState(CONTRACT_OPTIONS[0].text);
-            const [contractTitle, setContractTitle] = useState(CONTRACT_OPTIONS[0].title);
-            // -----------------------------------
+            // Reutilizamos toda la lógica de dibujo del Canvas de la versión anterior
+            // [omitted for brevity, assume getCoordinates, drawLine, handleStart, handleMove, handleEnd, handleClear are defined here]
 
-            // Función para mostrar mensajes de estado
-            const showMessage = useCallback((text, type = 'blue', duration = 5000) => {
-                setMessage({ text, type });
-                setTimeout(() => setMessage(null), duration);
-            }, []);
-            
-            // Efecto para actualizar el contrato cuando cambia la selección
-            useEffect(() => {
-                const contract = CONTRACT_OPTIONS.find(c => c.id === selectedContractId);
-                if (contract) {
-                    setContractText(contract.text);
-                    setContractTitle(contract.title);
+            const isCanvasBlank = (canvas) => {
+                const ctx = canvas.getContext('2d');
+                const data = ctx.getImageData(0, 0, canvas.width, canvas.height).data;
+                for (let i = 0; i < data.length; i += 4) {
+                    if (data[i] !== 255 || data[i+1] !== 255 || data[i+2] !== 255) {
+                        return false;
+                    }
                 }
-            }, [selectedContractId]);
-
-
-            // 1. Inicialización de Firebase y Autenticación
-            useEffect(() => {
-                // Si la configuración no existe o las librerías no están cargadas
-                if (Object.keys(firebaseConfig).length === 0 || !window.firebase) {
-                    showMessage("Advertencia: No hay configuración de Firebase. La app se muestra, pero NO guardará datos.", 'yellow', 10000);
-                    setLoading(false);
-                    setUserId(`anon-${generateSimpleId()}`); 
-                    return;
-                }
-
-                try {
-                    const app = initializeApp(firebaseConfig);
-                    const dbInstance = getFirestore(app);
-                    const authInstance = getAuth(app);
-
-                    const authenticate = async () => {
-                        try {
-                            const authApi = authInstance.auth();
-                            if (initialAuthToken) {
-                                await authApi.signInWithCustomToken(initialAuthToken);
-                            } else {
-                                await authApi.signInAnonymously();
-                            }
-                            const currentUserId = authApi.currentUser?.uid || `anon-${generateSimpleId()}`;
-                            
-                            setUserId(currentUserId);
-                            setDb(dbInstance);
-                            setIsDbReady(true);
-                            setLoading(false);
-                            showMessage(`Conectado a Firestore. User ID: ${currentUserId.substring(0, 8)}...`, 'green', 3000);
-                        } catch (error) {
-                            console.error("Error de autenticación o base de datos:", error);
-                            showMessage("Error al autenticar con Firebase. El guardado no funcionará.", 'red', 10000);
-                            setLoading(false);
-                        }
-                    };
-                    authenticate();
-                } catch(error) {
-                    console.error("Error al inicializar la app de Firebase:", error);
-                    showMessage("Error crítico al inicializar Firebase. Revise la consola.", 'red', 10000);
-                    setLoading(false);
-                }
-            }, []);
+                return true;
+            };
 
             // 2. Configuración inicial del Canvas de Firma
             useEffect(() => {
@@ -209,8 +139,8 @@ Acepto haber recibido y entendido el documento.
                 ctx.fillStyle = '#FFFFFF';
                 ctx.fillRect(0, 0, canvas.width, canvas.height); // Fondo blanco
             }, []);
-
-            // 3. Lógica de Dibujo del Canvas (Movimiento y Coordenadas)
+            
+            // Lógica de Dibujo (copiada desde la versión anterior para mantener la funcionalidad)
             const getCoordinates = (event) => {
                 const canvas = canvasRef.current;
                 if (!canvas) return { x: 0, y: 0 };
@@ -225,7 +155,6 @@ Acepto haber recibido y entendido el documento.
                     clientY = event.clientY;
                 }
 
-                // Aseguramos que las coordenadas estén dentro del canvas
                 const scaleX = canvas.width / rect.width;
                 const scaleY = canvas.height / rect.height;
 
@@ -267,8 +196,6 @@ Acepto haber recibido y entendido el documento.
                 setIsDrawing(false);
             };
 
-            // 4. Funciones de Botones
-
             const handleClear = () => {
                 const canvas = canvasRef.current;
                 if (!canvas) return;
@@ -277,39 +204,8 @@ Acepto haber recibido y entendido el documento.
                 ctx.fillRect(0, 0, canvas.width, canvas.height); 
                 showMessage('Firma borrada. Intente de nuevo.', 'yellow');
             };
-
-            const isCanvasBlank = (canvas) => {
-                const ctx = canvas.getContext('2d');
-                const data = ctx.getImageData(0, 0, canvas.width, canvas.height).data;
-                for (let i = 0; i < data.length; i += 4) {
-                    if (data[i] !== 255 || data[i+1] !== 255 || data[i+2] !== 255) {
-                        return false;
-                    }
-                }
-                return true;
-            }
-
-            // Función de utilidad para envolver texto en el canvas de descarga
-            const wrapText = (context, text, x, y, maxWidth, lineHeight) => {
-                const words = text.split(' ');
-                let line = '';
-                let lineY = y;
-
-                for(let n = 0; n < words.length; n++) {
-                    const testLine = line + words[n] + ' ';
-                    const metrics = context.measureText(testLine);
-                    const testWidth = metrics.width;
-                    if (testWidth > maxWidth && n > 0) {
-                        context.fillText(line, x, lineY);
-                        line = words[n] + ' ';
-                        lineY += lineHeight;
-                    } else {
-                        line = testLine;
-                    }
-                }
-                context.fillText(line, x, lineY);
-                return lineY;
-            }
+            
+            // Fin de la lógica de dibujo
 
             const handleSave = async () => {
                 if (!signerName.trim() || !signerRut.trim()) {
@@ -329,29 +225,37 @@ Acepto haber recibido y entendido el documento.
                 showMessage("Guardando documento y generando descarga, por favor espere...", 'blue');
 
                 try {
-                    // 1. GUARDADO EN FIRESTORE (Solo si la DB está lista)
+                    const name = signerName.trim();
+                    const rut = signerRut.trim();
+                    const dateSigned = new Date().toLocaleString('es-CL');
+                    const finalDocumentText = replacePlaceholders(documentText, name, rut, dateSigned.split(',')[0]);
+
+                    // 1. GUARDADO EN FIRESTORE (A la colección de CONTRATOS FIRMADOS)
                     if (isDbReady && db && db.collection) {
-                        const contractData = {
-                            contractTitle: contractTitle, // NUEVO: Título del contrato
-                            signerName: signerName.trim(),
-                            signerRut: signerRut.trim(),
+                        const signedData = {
+                            contractTitle: documentTitle,
+                            signerName: name,
+                            signerRut: rut,
                             signedAt: new Date().toISOString(),
-                            contractText: contractText,
+                            contractText: finalDocumentText, // Guardamos el texto final con placeholders reemplazados
                             signatureData: signatureData,
+                            originalContractId: initialData.id,
                             userId: userId,
-                            appId: appId
+                            appId: initialData.appId
                         };
-                        const docRef = await db.collection(CONTRACTS_COLLECTION_PATH).add(contractData);
+                        const docRef = await db.collection(SIGNED_CONTRACTS_PATH).add(signedData);
+                        
+                        // Opcional: Eliminar el contrato de la cola de pendientes después de firmar
+                        if (initialData.id) {
+                            await db.collection(PENDING_CONTRACTS_PATH).doc(initialData.id).delete();
+                        }
+
                         showMessage(`¡Contrato guardado (ID: ${docRef.id})! Generando descarga...`, 'green', 5000);
                     } else {
                         showMessage("Advertencia: Base de datos no disponible. Solo se generará la descarga.", 'yellow', 5000);
                     }
                     
-                    // 2. GENERACIÓN Y DESCARGA DEL PNG
-                    const name = signerName.trim();
-                    const rut = signerRut.trim();
-                    const dateSigned = new Date().toLocaleString('es-CL');
-
+                    // 2. GENERACIÓN Y DESCARGA DEL PNG (La misma lógica de antes)
                     const docCanvas = document.createElement('canvas');
                     docCanvas.width = 1000;
                     docCanvas.height = 1200; 
@@ -362,7 +266,7 @@ Acepto haber recibido y entendido el documento.
                     docCtx.fillStyle = '#000000';
                     
                     // Título y Metadata
-                    docCtx.fillText(contractTitle, 50, 50); // Usamos el título del contrato seleccionado
+                    docCtx.fillText(documentTitle, 50, 50);
                     docCtx.font = '16px Inter, sans-serif';
                     docCtx.fillText(`Firmante: ${name}`, 50, 90);
                     docCtx.fillText(`RUT/ID: ${rut}`, 50, 115);
@@ -370,13 +274,7 @@ Acepto haber recibido y entendido el documento.
                     
                     // Contenido del Contrato
                     docCtx.font = '14px Inter, sans-serif';
-                    // Reemplazar placeholders comunes en el texto
-                    const textToDraw = contractText
-                        .replace('[NOMBRE DEL FIRMANTE]', name)
-                        .replace('[RUT DEL FIRMANTE]', rut)
-                        .replace('[FECHA ACTUAL]', dateSigned.split(',')[0]); // Solo la fecha, no la hora
-
-                    let lastY = wrapText(docCtx, textToDraw, 50, 180, docCanvas.width - 100, 20);
+                    let lastY = wrapText(docCtx, finalDocumentText, 50, 180, docCanvas.width - 100, 20);
 
                     // Agregar la Firma Capturada
                     const signatureImg = new Image();
@@ -397,19 +295,16 @@ Acepto haber recibido y entendido el documento.
 
                         // Descargar el documento final
                         const link = document.createElement('a');
-                        link.download = `${contractTitle.replace(/\s/g, '_')}_${name.replace(/\s/g, '_')}_${Date.now()}.png`;
+                        link.download = `${documentTitle.replace(/\s/g, '_')}_${name.replace(/\s/g, '_')}_${Date.now()}.png`;
                         link.href = docCanvas.toDataURL('image/png');
                         document.body.appendChild(link);
                         link.click();
                         document.body.removeChild(link);
 
-                        // Resetea el formulario y el canvas
-                        setSignerName('');
-                        setSignerRut('');
-                        handleClear();
-                        
+                        // Opcional: Redirigir o limpiar
+                        setTimeout(() => window.location.href = window.location.origin + window.location.pathname, 2000); 
+
                         setLoading(false);
-                        showMessage(`¡Descarga del contrato "${contractTitle}" completada!`, 'green', 5000);
                     };
                     signatureImg.src = signatureData;
 
@@ -419,64 +314,18 @@ Acepto haber recibido y entendido el documento.
                     setLoading(false);
                 }
             };
-
-            const MessageComponent = message && (
-                <div className={`mt-4 p-3 rounded-lg text-sm font-medium transition duration-300 border 
-                    ${message.type === 'green' ? 'bg-green-100 text-green-800 border-green-300' : 
-                     message.type === 'red' ? 'bg-red-100 text-red-800 border-red-300' : 
-                     message.type === 'yellow' ? 'bg-yellow-100 text-yellow-800 border-yellow-300' :
-                     'bg-blue-100 text-blue-800 border-blue-300'}`}
-                >
-                    {message.text}
-                </div>
-            );
             
-            // Contenido del contrato con placeholders reemplazados (para la vista)
-            const displayContractText = contractText
-                .replace('[NOMBRE DEL FIRMANTE]', signerName || '__________________')
-                .replace('[RUT DEL FIRMANTE]', signerRut || '__________________')
-                .replace('[FECHA ACTUAL]', new Date().toLocaleDateString('es-CL'));
-
+            const displayContractText = replacePlaceholders(documentText, signerName, signerRut, new Date().toLocaleDateString('es-CL'));
 
             return (
                 <div className="max-w-4xl mx-auto bg-white p-6 sm:p-8 rounded-xl shadow-2xl border border-gray-100">
-                    
                     <header className="text-center mb-8">
-                        <h1 className="text-3xl font-bold text-gray-800">Sistema de Firma: Múltiples Contratos</h1>
-                        <p className="text-gray-500 mt-2">Seleccione el documento a firmar, complete los datos y use el *mouse* o el dedo para la firma.</p>
-                        {MessageComponent}
-                        {userId && <p className="text-xs text-gray-400 mt-2">ID de Sesión: {userId}</p>}
-                        
-                        {loading && (
-                            <div className="flex justify-center items-center mt-4">
-                                <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-500"></div>
-                                <span className="ml-3 text-blue-600">Procesando...</span>
-                            </div>
-                        )}
+                        <h1 className="text-3xl font-bold text-gray-800">Firma Requerida: {documentTitle}</h1>
+                        <p className="text-gray-500 mt-2">Por favor, revise el documento, complete sus datos y firme para confirmar su aceptación.</p>
                     </header>
                     
-                    {/* SELECCIÓN DE CONTRATO (NUEVO) */}
-                    <div className="mb-8">
-                        <h2 className="text-xl font-semibold mb-3 text-gray-700">1. Seleccionar Documento</h2>
-                        <select
-                            id="contractSelector"
-                            value={selectedContractId}
-                            onChange={(e) => {
-                                setSelectedContractId(e.target.value);
-                                handleClear(); // Limpia la firma al cambiar de contrato
-                            }}
-                            className="w-full p-3 border border-gray-300 rounded-lg focus:ring-blue-500 focus:border-blue-500 text-base bg-white" 
-                            disabled={loading}
-                        >
-                            {CONTRACT_OPTIONS.map(option => (
-                                <option key={option.id} value={option.id}>{option.title}</option>
-                            ))}
-                        </select>
-                    </div>
-
                     {/* Contenedor del Contrato */}
                     <div className="mb-8">
-                        <h2 className="text-xl font-semibold mb-3 text-gray-700">{contractTitle} (Vista Previa)</h2>
                         <div className="contract-content rounded-lg p-4 bg-gray-50 text-justify text-sm leading-relaxed max-h-60 overflow-y-auto">
                             <pre className="text-sm text-gray-800 leading-relaxed font-sans whitespace-pre-wrap">{displayContractText}</pre>
                         </div>
@@ -484,7 +333,7 @@ Acepto haber recibido y entendido el documento.
 
                     {/* Sección de Datos y Firma */}
                     <div className="mb-8 p-4 bg-blue-50 rounded-xl border border-blue-200">
-                        <h2 className="text-xl font-semibold mb-4 text-blue-700">3. Complete y Firme</h2>
+                        <h2 className="text-xl font-semibold mb-4 text-blue-700">Sus Datos y Firma</h2>
                         
                         {/* Campos a Llenar */}
                         <div className="flex flex-col md:flex-row gap-4 mb-6">
@@ -496,7 +345,7 @@ Acepto haber recibido y entendido el documento.
                                 onChange={(e) => setSignerName(e.target.value)}
                                 className="flex-grow p-3 border border-gray-300 rounded-lg focus:ring-blue-500 focus:border-blue-500 text-sm" 
                                 required 
-                                disabled={loading}
+                                disabled={loading || initialData.signerName} // Deshabilita si ya viene prellenado
                             />
                             <input 
                                 type="text" 
@@ -506,12 +355,12 @@ Acepto haber recibido y entendido el documento.
                                 onChange={(e) => setSignerRut(e.target.value)}
                                 className="flex-grow p-3 border border-gray-300 rounded-lg focus:ring-blue-500 focus:border-blue-500 text-sm"
                                 required 
-                                disabled={loading}
+                                disabled={loading || initialData.signerRut} // Deshabilita si ya viene prellenado
                             />
                         </div>
                         
                         {/* Canvas de Firma */}
-                        <p className="text-sm text-gray-600 mt-4 mb-2">4. Use el mouse o el dedo para firmar dentro del recuadro:</p>
+                        <p className="text-sm text-gray-600 mt-4 mb-2">Use el mouse o el dedo para firmar dentro del recuadro:</p>
                         <canvas 
                             ref={canvasRef} 
                             id="signatureCanvas" 
@@ -542,19 +391,378 @@ Acepto haber recibido y entendido el documento.
                                 className="flex-1 bg-green-500 hover:bg-green-600 text-white font-semibold py-3 px-4 rounded-xl transition duration-150 shadow-md hover:shadow-lg disabled:bg-gray-400"
                                 disabled={loading || !signerName || !signerRut}
                             >
-                                Guardar y Descargar Contrato Firmado (PNG)
+                                Firmar y Guardar Documento (PNG)
                             </button>
                         </div>
                     </div>
+                </div>
+            );
+        }
 
-                    <div className="text-center text-sm text-gray-500 mt-6 p-4 border-t">
-                        <p className="font-bold text-red-600 mt-2">ADVERTENCIA LEGAL:</p>
-                        <p>Esta solución guarda la información y la imagen de la firma en su base de datos (Firestore). Sin embargo, **NO utiliza Firma Electrónica Avanzada** y puede no ser legalmente vinculante para todos los propósitos. Consulte a un abogado si la validez legal estricta es obligatoria.</p>
-                        <p className="mt-2">Datos guardados en Firestore en la colección: <code>{CONTRACTS_COLLECTION_PATH}</code></p>
+        // Componente: Vista del ADMINISTRADOR
+        function AdminView({ db, isDbReady, userId, showMessage, setLoading, loading }) {
+            const [contractTitle, setContractTitle] = useState('');
+            const [contractText, setContractText] = useState('');
+            const [targetName, setTargetName] = useState('');
+            const [targetRut, setTargetRut] = useState('');
+            const [contracts, setContracts] = useState([]);
+            const [generatedLink, setGeneratedLink] = useState('');
+            const [viewSigned, setViewSigned] = useState(false); // Alternar entre Pendientes y Firmados
+
+            // Cargar contratos pendientes/firmados
+            useEffect(() => {
+                if (!isDbReady || !db) return;
+
+                const path = viewSigned ? SIGNED_CONTRACTS_PATH : PENDING_CONTRACTS_PATH;
+                
+                // Firestore V8 onSnapshot
+                const unsubscribe = db.collection(path).onSnapshot(snapshot => {
+                    const loadedContracts = snapshot.docs.map(doc => ({
+                        id: doc.id,
+                        ...doc.data()
+                    }));
+                    setContracts(loadedContracts);
+                }, error => {
+                    console.error("Error al cargar contratos:", error);
+                    showMessage(`Error al cargar contratos: ${error.message}`, 'red', 10000);
+                });
+
+                return () => unsubscribe(); // Cleanup listener
+            }, [isDbReady, db, viewSigned]);
+
+            const handleCreateContract = async () => {
+                if (!isDbReady) {
+                    showMessage("La base de datos no está lista. No se puede guardar.", 'red');
+                    return;
+                }
+                if (!contractTitle.trim() || !contractText.trim() || !targetName.trim()) {
+                    showMessage("Debe completar Título, Contrato y Nombre del Firmante.", 'red');
+                    return;
+                }
+
+                setLoading(true);
+                showMessage("Creando contrato pendiente...", 'blue');
+
+                try {
+                    const newContractData = {
+                        contractTitle: contractTitle.trim(),
+                        contractText: contractText.trim(),
+                        signerName: targetName.trim(),
+                        signerRut: targetRut.trim(),
+                        appId: appId,
+                        createdAt: new Date().toISOString(),
+                        status: 'pending'
+                    };
+
+                    const docRef = await db.collection(PENDING_CONTRACTS_PATH).add(newContractData);
+                    const baseUrl = window.location.origin + window.location.pathname;
+                    const link = `${baseUrl}?contractId=${docRef.id}`;
+                    
+                    setGeneratedLink(link);
+                    setContractTitle('');
+                    setContractText('');
+                    setTargetName('');
+                    setTargetRut('');
+                    
+                    showMessage(`Contrato creado con éxito. Copie el enlace: ${link}`, 'green', 15000);
+                } catch (error) {
+                    console.error("Error al crear contrato:", error);
+                    showMessage(`Error al guardar: ${error.message}`, 'red', 10000);
+                } finally {
+                    setLoading(false);
+                }
+            };
+            
+            // Función para copiar el enlace
+            const copyLink = (link) => {
+                 if (link) {
+                    // Usamos document.execCommand('copy') como fallback para iFrames
+                    const tempInput = document.createElement('textarea');
+                    tempInput.value = link;
+                    document.body.appendChild(tempInput);
+                    tempInput.select();
+                    document.execCommand('copy');
+                    document.body.removeChild(tempInput);
+                    showMessage("¡Enlace copiado al portapapeles!", 'blue', 3000);
+                }
+            };
+            
+            // Renderizar la lista de contratos (simplificado)
+            const ContractList = ({ list }) => (
+                <div className="space-y-4">
+                    {list.length === 0 ? (
+                        <p className="text-gray-500 italic">No hay documentos {viewSigned ? 'firmados' : 'pendientes'} en la base de datos.</p>
+                    ) : (
+                        list.map(c => (
+                            <div key={c.id} className={`p-4 rounded-lg shadow-sm border ${viewSigned ? 'bg-green-50 border-green-300' : 'bg-yellow-50 border-yellow-300'}`}>
+                                <h3 className="font-semibold text-lg truncate">{c.contractTitle}</h3>
+                                <p className="text-sm text-gray-700">Para: **{c.signerName}** (RUT: {c.signerRut})</p>
+                                <p className="text-xs text-gray-500 mt-1">Creado: {new Date(c.createdAt).toLocaleDateString()}</p>
+                                {viewSigned ? (
+                                    <div className="mt-3">
+                                        <p className="text-xs text-green-700 font-medium">Firmado: {new Date(c.signedAt).toLocaleString()}</p>
+                                        <a href={c.signatureData} download={`${c.contractTitle}_${c.signerName}_FIRMADO.png`} className="text-blue-500 text-sm hover:underline mt-1 block">
+                                            Descargar Imagen PNG (Firma y Documento)
+                                        </a>
+                                    </div>
+                                ) : (
+                                    <div className="mt-3 flex gap-2">
+                                        <button 
+                                            onClick={() => copyLink(`${window.location.origin}${window.location.pathname}?contractId=${c.id}`)}
+                                            className="bg-blue-500 text-white text-xs py-2 px-3 rounded-lg hover:bg-blue-600 transition"
+                                        >
+                                            Copiar Link de Firma
+                                        </button>
+                                        <button 
+                                            onClick={() => showMessage("Eliminar funcionalidad no implementada.", 'yellow')}
+                                            className="bg-gray-400 text-white text-xs py-2 px-3 rounded-lg hover:bg-gray-500 transition"
+                                        >
+                                            Eliminar
+                                        </button>
+                                    </div>
+                                )}
+                            </div>
+                        ))
+                    )}
+                </div>
+            );
+            
+            return (
+                <div className="max-w-6xl mx-auto bg-white p-6 sm:p-8 rounded-xl shadow-2xl border border-gray-100">
+                    <header className="text-center mb-8">
+                        <h1 className="text-3xl font-bold text-gray-800">Panel de Administración de Contratos</h1>
+                        <p className="text-gray-500 mt-2">Cree nuevos documentos para firmar y gestione el estado de los contratos.</p>
+                        {generatedLink && (
+                            <div className="mt-4 p-3 bg-yellow-100 border border-yellow-300 rounded-lg text-sm break-all">
+                                <p className="font-bold text-yellow-800 mb-1">✅ Link Generado (Copie y Envíe):</p>
+                                <code className="text-yellow-900">{generatedLink}</code>
+                                <button onClick={() => copyLink(generatedLink)} className="ml-3 text-blue-600 font-semibold hover:underline">
+                                    [Copiar]
+                                </button>
+                            </div>
+                        )}
+                    </header>
+                    
+                    {/* Creador de Contratos */}
+                    <div className="mb-8 p-6 bg-gray-50 rounded-xl border border-gray-200">
+                        <h2 className="text-xl font-semibold mb-4 text-gray-700">1. Crear Nuevo Contrato Individual</h2>
+                        
+                        <input 
+                            type="text" 
+                            placeholder="Título del Contrato (ej: Anexo Contrato Supervisor)" 
+                            value={contractTitle}
+                            onChange={(e) => setContractTitle(e.target.value)}
+                            className="w-full p-3 border border-gray-300 rounded-lg focus:ring-blue-500 focus:border-blue-500 text-sm mb-4" 
+                        />
+                        <textarea
+                            placeholder="Pegue el texto COMPLETO del contrato aquí. Use [NOMBRE DEL FIRMANTE] y [RUT DEL FIRMANTE] como placeholders." 
+                            value={contractText}
+                            onChange={(e) => setContractText(e.target.value)}
+                            rows="6"
+                            className="w-full p-3 border border-gray-300 rounded-lg focus:ring-blue-500 focus:border-blue-500 text-sm mb-4 resize-none"
+                        />
+                        
+                        <div className="flex flex-col md:flex-row gap-4 mb-4">
+                            <input 
+                                type="text" 
+                                placeholder="Nombre del Firmante a quien va dirigido (Obligatorio)" 
+                                value={targetName}
+                                onChange={(e) => setTargetName(e.target.value)}
+                                className="flex-grow p-3 border border-gray-300 rounded-lg focus:ring-blue-500 focus:border-blue-500 text-sm" 
+                            />
+                            <input 
+                                type="text" 
+                                placeholder="RUT/ID del Firmante (Opcional)" 
+                                value={targetRut}
+                                onChange={(e) => setTargetRut(e.target.value)}
+                                className="flex-grow p-3 border border-gray-300 rounded-lg focus:ring-blue-500 focus:border-blue-500 text-sm" 
+                            />
+                        </div>
+
+                        <button 
+                            onClick={handleCreateContract} 
+                            className="w-full bg-blue-600 hover:bg-blue-700 text-white font-semibold py-3 rounded-xl transition duration-150 shadow-md disabled:bg-gray-400"
+                            disabled={loading || !contractTitle.trim() || !contractText.trim() || !targetName.trim()}
+                        >
+                            {loading ? 'Guardando...' : 'Guardar y Generar Link Único de Firma'}
+                        </button>
+                    </div>
+
+                    {/* Visor de Contratos */}
+                    <div className="p-6 bg-white rounded-xl border border-gray-200">
+                        <h2 className="text-xl font-semibold mb-4 text-gray-700">2. Estado de Documentos</h2>
+                        
+                        <div className="flex justify-start mb-4 gap-4">
+                            <button
+                                onClick={() => setViewSigned(false)}
+                                className={`py-2 px-4 rounded-lg font-medium transition ${!viewSigned ? 'bg-yellow-500 text-white shadow-md' : 'bg-gray-200 text-gray-700 hover:bg-gray-300'}`}
+                            >
+                                Pendientes ({contracts.filter(c => c.status === 'pending').length})
+                            </button>
+                             <button
+                                onClick={() => setViewSigned(true)}
+                                className={`py-2 px-4 rounded-lg font-medium transition ${viewSigned ? 'bg-green-500 text-white shadow-md' : 'bg-gray-200 text-gray-700 hover:bg-gray-300'}`}
+                            >
+                                Firmados ({contracts.length})
+                            </button>
+                        </div>
+                        
+                        <ContractList list={contracts} />
                     </div>
                 </div>
             );
-        };
+        }
+        
+        // --- COMPONENTE PRINCIPAL (RUTEO) ---
+        function App() {
+            const [db, setDb] = useState(null);
+            const [userId, setUserId] = useState(null);
+            const [isDbReady, setIsDbReady] = useState(false);
+            const [loading, setLoading] = useState(true);
+            const [message, setMessage] = useState(null);
+            const [viewMode, setViewMode] = useState('admin'); // 'admin' o 'signer'
+            const [initialContractData, setInitialContractData] = useState(null);
+
+            const showMessage = useCallback((text, type = 'blue', duration = 5000) => {
+                setMessage({ text, type });
+                setTimeout(() => setMessage(null), duration);
+            }, []);
+
+            // 1. Inicialización de Firebase y Autenticación
+            useEffect(() => {
+                const urlParams = new URLSearchParams(window.location.search);
+                const contractId = urlParams.get('contractId');
+                
+                // --- MANEJO DE VISTA ---
+                if (contractId) {
+                    setViewMode('signer');
+                } else {
+                    setViewMode('admin');
+                }
+
+                // Si la configuración no existe o las librerías no están cargadas
+                if (Object.keys(firebaseConfig).length === 0 || !window.firebase) {
+                    showMessage("Advertencia: No hay configuración de Firebase. Solo se mostrará la interfaz.", 'yellow', 10000);
+                    setLoading(false);
+                    setUserId(`anon-${generateSimpleId()}`); 
+                    return;
+                }
+
+                try {
+                    const app = initializeApp(firebaseConfig);
+                    const dbInstance = getFirestore(app);
+                    const authInstance = getAuth(app);
+
+                    const authenticate = async () => {
+                        try {
+                            const authApi = authInstance.auth();
+                            if (initialAuthToken) {
+                                await authApi.signInWithCustomToken(initialAuthToken);
+                            } else {
+                                await authApi.signInAnonymously();
+                            }
+                            const currentUserId = authApi.currentUser?.uid || `anon-${generateSimpleId()}`;
+                            
+                            setUserId(currentUserId);
+                            setDb(dbInstance);
+                            setIsDbReady(true);
+                            showMessage(`Conectado a Firestore. User ID: ${currentUserId.substring(0, 8)}...`, 'green', 1500);
+
+                            // Si es vista de firmante, cargamos el contrato
+                            if (contractId) {
+                                const docRef = dbInstance.collection(PENDING_CONTRACTS_PATH).doc(contractId);
+                                const doc = await docRef.get();
+                                if (doc.exists) {
+                                    setInitialContractData({ id: doc.id, ...doc.data() });
+                                    showMessage("Contrato cargado con éxito. ¡Listo para firmar!", 'green', 5000);
+                                } else {
+                                    showMessage("Error: Este contrato no existe o ya fue firmado.", 'red', 10000);
+                                    setInitialContractData({ contractTitle: 'Documento No Encontrado', contractText: 'El enlace de este documento es inválido o el contrato ya ha sido procesado.', signerName: '', signerRut: '' });
+                                }
+                            }
+                        } catch (error) {
+                            console.error("Error de autenticación/carga:", error);
+                            showMessage("Error al autenticar o cargar datos. La DB puede no funcionar.", 'red', 10000);
+                        } finally {
+                            setLoading(false);
+                        }
+                    };
+                    authenticate();
+                } catch(error) {
+                    console.error("Error al inicializar la app de Firebase:", error);
+                    showMessage("Error crítico al inicializar Firebase.", 'red', 10000);
+                    setLoading(false);
+                }
+            }, []);
+            
+            // Renderizado condicional basado en la vista
+            const renderView = () => {
+                if (loading) {
+                    return (
+                        <div className="flex justify-center items-center h-40">
+                            <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-500"></div>
+                            <span className="ml-4 text-blue-600">Cargando aplicación y datos...</span>
+                        </div>
+                    );
+                }
+
+                if (viewMode === 'admin') {
+                    return (
+                        <AdminView 
+                            db={db} 
+                            isDbReady={isDbReady} 
+                            userId={userId} 
+                            showMessage={showMessage} 
+                            setLoading={setLoading} 
+                            loading={loading} 
+                        />
+                    );
+                }
+                
+                if (viewMode === 'signer' && initialContractData) {
+                    return (
+                        <SignerView 
+                            db={db} 
+                            isDbReady={isDbReady} 
+                            userId={userId} 
+                            initialData={initialContractData} 
+                            showMessage={showMessage} 
+                            setLoading={setLoading} 
+                            loading={loading} 
+                        />
+                    );
+                }
+                
+                // Fallback para errores de carga en la vista del firmante
+                if (viewMode === 'signer' && !initialContractData) {
+                    return <p className="text-red-500 text-center text-lg mt-10">Error: No se pudo cargar la información del contrato. Verifique el enlace.</p>;
+                }
+                
+                return null;
+            };
+
+            const MessageComponent = message && (
+                <div className={`fixed top-4 left-1/2 transform -translate-x-1/2 w-full max-w-md p-3 rounded-lg text-sm font-medium transition duration-300 border shadow-lg z-50
+                    ${message.type === 'green' ? 'bg-green-100 text-green-800 border-green-300' : 
+                     message.type === 'red' ? 'bg-red-100 text-red-800 border-red-300' : 
+                     message.type === 'yellow' ? 'bg-yellow-100 text-yellow-800 border-yellow-300' :
+                     'bg-blue-100 text-blue-800 border-blue-300'}`}
+                >
+                    {message.text}
+                </div>
+            );
+
+
+            return (
+                <>
+                    {MessageComponent}
+                    {renderView()}
+                    <div className="text-center text-xs text-gray-400 mt-6 p-2 border-t w-full max-w-4xl mx-auto">
+                        {isDbReady ? 'Base de Datos Conectada' : 'Base de Datos Desconectada (Solo Descarga Activa)'}
+                    </div>
+                </>
+            );
+        }
 
         // Carga la aplicación React en el elemento con id="root"
         const container = document.getElementById('root');
