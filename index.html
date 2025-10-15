@@ -47,19 +47,20 @@
 
     <!-- 3. CÓDIGO DE LA APLICACIÓN DE FIRMA (INCRUSTADO EN JSX) -->
     <script type="text/babel">
-        // Se obtienen las funciones de Firebase de la ventana (window) ya que fueron
-        // cargadas por los scripts de CDN.
-        const getFirestore = (app) => window.firebase.firestore(app);
-        const initializeApp = (config) => window.firebase.initializeApp(config);
-        const getAuth = (app) => window.firebase.auth(app);
+        // Función de ID Aleatorio compatible con todos los navegadores
+        const generateSimpleId = () => Math.random().toString(36).substring(2, 10);
+        
+        // Se obtienen las funciones de Firebase de la ventana (window) de forma segura
+        const getFirestore = (app) => window.firebase && window.firebase.firestore(app);
+        const initializeApp = (config) => window.firebase && window.firebase.initializeApp(config);
+        const getAuth = (app) => window.firebase && window.firebase.auth(app);
         
         // Funciones simplificadas para Firebase V8
-        const CONTRACTS_COLLECTION_NAME = "contracts_signed"; // Nombre de colección fijo para Netlify
+        const CONTRACTS_COLLECTION_NAME = "contracts_signed";
         
-        // --- ADAPTACIÓN DE CONSTANTES PARA NETLIFY ---
-        // En Netlify, estas variables globales NO existen, se inicializan a valores seguros
+        // --- ADAPTACIÓN DE CONSTANTES PARA GITHUB PAGES ---
         const appId = 'net-app-default';
-        const firebaseConfig = {}; // Configuración vacía en Netlify. El guardado fallará, pero la interfaz cargará.
+        const firebaseConfig = {}; // Configuración vacía.
         const initialAuthToken = null;
         
         // Rutas de almacenamiento
@@ -68,8 +69,8 @@
 
         const { useState, useEffect, useRef, useCallback } = React;
 
-        // Componente principal de la aplicación
-        const App = () => {
+        // Componente principal de la aplicación (Declarado como función pura)
+        function App() {
             const canvasRef = useRef(null);
             const [db, setDb] = useState(null);
             const [userId, setUserId] = useState(null);
@@ -103,12 +104,11 @@ Las demás cláusulas se mantienen sin alteración alguna.
 
             // 1. Inicialización de Firebase y Autenticación
             useEffect(() => {
-                // En Netlify, esta configuración está vacía. Mostramos advertencia y continuamos.
-                if (Object.keys(firebaseConfig).length === 0) {
+                // Si la configuración no existe o las librerías no están cargadas
+                if (Object.keys(firebaseConfig).length === 0 || !window.firebase) {
                     showMessage("Advertencia: No hay configuración de Firebase. La app se muestra, pero NO guardará datos.", 'yellow', 10000);
                     setLoading(false);
-                    // Establece un ID anónimo temporal solo para la interfaz
-                    setUserId(`anon-${crypto.randomUUID().substring(0, 8)}`); 
+                    setUserId(`anon-${generateSimpleId()}`); 
                     return;
                 }
 
@@ -119,14 +119,13 @@ Las demás cláusulas se mantienen sin alteración alguna.
 
                     const authenticate = async () => {
                         try {
-                            // Autenticación V8
                             const authApi = authInstance.auth();
                             if (initialAuthToken) {
                                 await authApi.signInWithCustomToken(initialAuthToken);
                             } else {
                                 await authApi.signInAnonymously();
                             }
-                            const currentUserId = authApi.currentUser?.uid || `anon-${crypto.randomUUID()}`;
+                            const currentUserId = authApi.currentUser?.uid || `anon-${generateSimpleId()}`;
                             
                             setUserId(currentUserId);
                             setDb(dbInstance);
@@ -223,19 +222,15 @@ Las demás cláusulas se mantienen sin alteración alguna.
                 const canvas = canvasRef.current;
                 if (!canvas) return;
                 const ctx = canvas.getContext('2d');
-                // Usamos fillRect para un borrado completo y con fondo blanco
                 ctx.fillStyle = '#FFFFFF';
                 ctx.fillRect(0, 0, canvas.width, canvas.height); 
                 showMessage('Firma borrada. Intente de nuevo.', 'yellow');
             };
 
             const isCanvasBlank = (canvas) => {
-                // Simplificado para verificar solo si el usuario ha dibujado algo
                 const ctx = canvas.getContext('2d');
                 const data = ctx.getImageData(0, 0, canvas.width, canvas.height).data;
-                // Compara si todos los píxeles son blancos (el color de fondo)
                 for (let i = 0; i < data.length; i += 4) {
-                    // Chequea si el píxel NO es completamente blanco (255, 255, 255, 255)
                     if (data[i] !== 255 || data[i+1] !== 255 || data[i+2] !== 255) {
                         return false;
                     }
@@ -262,7 +257,7 @@ Las demás cláusulas se mantienen sin alteración alguna.
                     }
                 }
                 context.fillText(line, x, lineY);
-                return lineY; // Devuelve la última posición Y utilizada
+                return lineY;
             }
 
             const handleSave = async () => {
@@ -277,24 +272,23 @@ Las demás cláusulas se mantienen sin alteración alguna.
                     return;
                 }
 
-                const signatureData = canvas.toDataURL('image/png'); // Firma en Base64
+                const signatureData = canvas.toDataURL('image/png');
                 
                 setLoading(true);
                 showMessage("Guardando documento y generando descarga, por favor espere...", 'blue');
 
                 try {
                     // 1. GUARDADO EN FIRESTORE (Solo si la DB está lista)
-                    if (isDbReady) {
+                    if (isDbReady && db && db.collection) {
                         const contractData = {
                             signerName: signerName.trim(),
                             signerRut: signerRut.trim(),
                             signedAt: new Date().toISOString(),
                             contractText: contractText,
-                            signatureData: signatureData, // Base64 de la imagen de firma
+                            signatureData: signatureData,
                             userId: userId,
                             appId: appId
                         };
-                        // Usamos la sintaxis V8 correcta
                         const docRef = await db.collection(CONTRACTS_COLLECTION_PATH).add(contractData);
                         showMessage(`¡Contrato guardado (ID: ${docRef.id})! Generando descarga...`, 'green', 5000);
                     } else {
@@ -327,7 +321,6 @@ Las demás cláusulas se mantienen sin alteración alguna.
                         .replace('[NOMBRE DEL FIRMANTE]', name)
                         .replace('[RUT DEL FIRMANTE]', rut);
 
-                    // La función wrapText devuelve la última posición Y
                     let lastY = wrapText(docCtx, textToDraw, 50, 180, docCanvas.width - 100, 20);
 
                     // Agregar la Firma Capturada
@@ -338,8 +331,7 @@ Las demás cláusulas se mantienen sin alteración alguna.
                         docCtx.font = '18px Inter, sans-serif';
                         docCtx.fillText('FIRMA DIGITAL CAPTURADA', 50, startY);
 
-                        // Dibuja la firma del canvas original
-                        const signatureCanvasWidth = 400; // Tamaño fijo para la imagen en el documento
+                        const signatureCanvasWidth = 400;
                         const signatureCanvasHeight = 150;
                         docCtx.drawImage(signatureImg, 50, startY + 20, signatureCanvasWidth, signatureCanvasHeight);
                         
