@@ -1,0 +1,499 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Sistema de Firma de Contratos</title>
+    <!-- Carga Tailwind CSS para el diseño -->
+    <script src="https://cdn.tailwindcss.com"></script>
+    <!-- Define la fuente Inter (usada en el diseño) -->
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Inter:wght@400;600;700&display=swap');
+        body {
+            font-family: 'Inter', sans-serif;
+            background-color: #f7f9fc;
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 20px;
+        }
+        /* Estilos para el canvas de firma */
+        #signatureCanvas {
+            touch-action: none; /* Previene el scroll en dispositivos táctiles */
+            border: 2px solid #3b82f6; /* Borde azul para el área de firma */
+        }
+    </style>
+</head>
+<body>
+    <!-- Este es el contenedor (root) donde se montará tu aplicación -->
+    <div id="root" class="w-full"></div>
+
+    <!-- 1. LIBRERÍAS CORE DE REACT (Necesarias para ejecutar JSX) -->
+    <!-- React -->
+    <script src="https://unpkg.com/react@18/umd/react.development.js"></script>
+    <!-- ReactDOM (Para montar la app en el DOM) -->
+    <script src="https://unpkg.com/react-dom@18/umd/react-dom.development.js"></script>
+    <!-- Babel (Convierte JSX a JS) -->
+    <script src="https://unpkg.com/@babel/standalone/babel.min.js"></script>
+
+    <!-- 2. LIBRERÍAS DE FIREBASE V8 (Necesarias para la base de datos Firestore y autenticación) -->
+    <!-- Firebase App -->
+    <script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-app.js"></script>
+    <!-- Firebase Auth (Autenticación) -->
+    <script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-auth.js"></script>
+    <!-- Firebase Firestore (Base de Datos) -->
+    <script src="https://www.gstatic.com/firebasejs/8.10.1/firebase-firestore.js"></script>
+
+    <!-- 3. CÓDIGO DE LA APLICACIÓN DE FIRMA (INCRUSTADO EN JSX) -->
+    <script type="text/babel">
+        // Se obtienen las funciones de Firebase de la ventana (window) ya que fueron
+        // cargadas por los scripts de CDN.
+        const getFirestore = (app) => window.firebase.firestore(app);
+        const initializeApp = (config) => window.firebase.initializeApp(config);
+        const getAuth = (app) => window.firebase.auth(app);
+        
+        // Funciones simplificadas para Firebase V8
+        const CONTRACTS_COLLECTION_NAME = "contracts_signed"; // Nombre de colección fijo para Netlify
+        
+        // --- ADAPTACIÓN DE CONSTANTES PARA NETLIFY ---
+        // En Netlify, estas variables globales NO existen, se inicializan a valores seguros
+        const appId = 'net-app-default';
+        const firebaseConfig = {}; // Configuración vacía en Netlify. El guardado fallará, pero la interfaz cargará.
+        const initialAuthToken = null;
+        
+        // Rutas de almacenamiento
+        const CONTRACTS_COLLECTION_PATH = `artifacts/${appId}/public/data/${CONTRACTS_COLLECTION_NAME}`;
+        // ---------------------------------------------
+
+        const { useState, useEffect, useRef, useCallback } = React;
+
+        // Componente principal de la aplicación
+        const App = () => {
+            const canvasRef = useRef(null);
+            const [db, setDb] = useState(null);
+            const [userId, setUserId] = useState(null);
+            const [isDbReady, setIsDbReady] = useState(false);
+            const [loading, setLoading] = useState(true);
+            const [message, setMessage] = useState(null);
+
+            // Estado del formulario
+            const [signerName, setSignerName] = useState('');
+            const [signerRut, setSignerRut] = useState('');
+            const [isDrawing, setIsDrawing] = useState(false);
+            const [lastPosition, setLastPosition] = useState({ x: 0, y: 0 });
+
+            // Contrato estático (el usuario lo edita directamente aquí)
+            const contractText = `
+ANEXO CONTRATO DE TRABAJO (GUARDADO EN BASE DE DATOS)
+
+En Colina, a 21 de Octubre de 2025, entre la Empresa IQU SPA, R.U.T. 76091270-0, representada en este acto por don(a) JORGE CORREAL cédula de identidad N° 6539973-3, en adelante "El Empleador" y don(a) [NOMBRE DEL FIRMANTE], cédula de identidad N°[RUT DEL FIRMANTE] en adelante "El Trabajador", se ha convenido el siguiente cambio al contrato de trabajo:
+
+Obra o Faena transitoria específica a desarrollar:
+El trabajador se compromete a realizar la labor de Supervisor De Obra, en dependencias de Km. 445 Ruta 5 Sur, Comuna de Pemuco, Chillan.
+
+Las demás cláusulas se mantienen sin alteración alguna.
+            `.trim();
+
+            // Función para mostrar mensajes de estado
+            const showMessage = useCallback((text, type = 'blue', duration = 5000) => {
+                setMessage({ text, type });
+                setTimeout(() => setMessage(null), duration);
+            }, []);
+
+            // 1. Inicialización de Firebase y Autenticación
+            useEffect(() => {
+                // En Netlify, esta configuración está vacía. Mostramos advertencia y continuamos.
+                if (Object.keys(firebaseConfig).length === 0) {
+                    showMessage("Advertencia: No hay configuración de Firebase. La app se muestra, pero NO guardará datos.", 'yellow', 10000);
+                    setLoading(false);
+                    // Establece un ID anónimo temporal solo para la interfaz
+                    setUserId(`anon-${crypto.randomUUID().substring(0, 8)}`); 
+                    return;
+                }
+
+                try {
+                    const app = initializeApp(firebaseConfig);
+                    const dbInstance = getFirestore(app);
+                    const authInstance = getAuth(app);
+
+                    const authenticate = async () => {
+                        try {
+                            // Autenticación V8
+                            const authApi = authInstance.auth();
+                            if (initialAuthToken) {
+                                await authApi.signInWithCustomToken(initialAuthToken);
+                            } else {
+                                await authApi.signInAnonymously();
+                            }
+                            const currentUserId = authApi.currentUser?.uid || `anon-${crypto.randomUUID()}`;
+                            
+                            setUserId(currentUserId);
+                            setDb(dbInstance);
+                            setIsDbReady(true);
+                            setLoading(false);
+                            showMessage(`Conectado a Firestore. User ID: ${currentUserId.substring(0, 8)}...`, 'green', 3000);
+                        } catch (error) {
+                            console.error("Error de autenticación o base de datos:", error);
+                            showMessage("Error al autenticar con Firebase. El guardado no funcionará.", 'red', 10000);
+                            setLoading(false);
+                        }
+                    };
+                    authenticate();
+                } catch(error) {
+                    console.error("Error al inicializar la app de Firebase:", error);
+                    showMessage("Error crítico al inicializar Firebase. Revise la consola.", 'red', 10000);
+                    setLoading(false);
+                }
+            }, []);
+
+            // 2. Configuración inicial del Canvas de Firma
+            useEffect(() => {
+                const canvas = canvasRef.current;
+                if (!canvas) return;
+                const ctx = canvas.getContext('2d');
+                
+                ctx.lineWidth = 3;
+                ctx.lineCap = 'round';
+                ctx.strokeStyle = '#000000';
+                ctx.fillStyle = '#FFFFFF';
+                ctx.fillRect(0, 0, canvas.width, canvas.height); // Fondo blanco
+            }, []);
+
+            // 3. Lógica de Dibujo del Canvas (Movimiento y Coordenadas)
+            const getCoordinates = (event) => {
+                const canvas = canvasRef.current;
+                if (!canvas) return { x: 0, y: 0 };
+                const rect = canvas.getBoundingClientRect();
+                
+                let clientX, clientY;
+                if (event.touches) {
+                    clientX = event.touches[0].clientX;
+                    clientY = event.touches[0].clientY;
+                } else {
+                    clientX = event.clientX;
+                    clientY = event.clientY;
+                }
+
+                // Aseguramos que las coordenadas estén dentro del canvas
+                const scaleX = canvas.width / rect.width;
+                const scaleY = canvas.height / rect.height;
+
+                return {
+                    x: (clientX - rect.left) * scaleX,
+                    y: (clientY - rect.top) * scaleY,
+                };
+            };
+
+            const drawLine = useCallback((x1, y1, x2, y2) => {
+                const canvas = canvasRef.current;
+                if (!canvas) return;
+                const ctx = canvas.getContext('2d');
+                
+                ctx.beginPath();
+                ctx.moveTo(x1, y1);
+                ctx.lineTo(x2, y2);
+                ctx.stroke();
+                ctx.closePath();
+            }, []);
+
+            const handleStart = (event) => {
+                if (event.touches) event.preventDefault();
+                const { x, y } = getCoordinates(event);
+                setIsDrawing(true);
+                setLastPosition({ x, y });
+            };
+
+            const handleMove = (event) => {
+                if (!isDrawing) return;
+                if (event.touches) event.preventDefault();
+
+                const { x, y } = getCoordinates(event);
+                drawLine(lastPosition.x, lastPosition.y, x, y);
+                setLastPosition({ x, y });
+            };
+
+            const handleEnd = () => {
+                setIsDrawing(false);
+            };
+
+            // 4. Funciones de Botones
+
+            const handleClear = () => {
+                const canvas = canvasRef.current;
+                if (!canvas) return;
+                const ctx = canvas.getContext('2d');
+                // Usamos fillRect para un borrado completo y con fondo blanco
+                ctx.fillStyle = '#FFFFFF';
+                ctx.fillRect(0, 0, canvas.width, canvas.height); 
+                showMessage('Firma borrada. Intente de nuevo.', 'yellow');
+            };
+
+            const isCanvasBlank = (canvas) => {
+                // Simplificado para verificar solo si el usuario ha dibujado algo
+                const ctx = canvas.getContext('2d');
+                const data = ctx.getImageData(0, 0, canvas.width, canvas.height).data;
+                // Compara si todos los píxeles son blancos (el color de fondo)
+                for (let i = 0; i < data.length; i += 4) {
+                    // Chequea si el píxel NO es completamente blanco (255, 255, 255, 255)
+                    if (data[i] !== 255 || data[i+1] !== 255 || data[i+2] !== 255) {
+                        return false;
+                    }
+                }
+                return true;
+            }
+
+            // Función de utilidad para envolver texto en el canvas de descarga
+            const wrapText = (context, text, x, y, maxWidth, lineHeight) => {
+                const words = text.split(' ');
+                let line = '';
+                let lineY = y;
+
+                for(let n = 0; n < words.length; n++) {
+                    const testLine = line + words[n] + ' ';
+                    const metrics = context.measureText(testLine);
+                    const testWidth = metrics.width;
+                    if (testWidth > maxWidth && n > 0) {
+                        context.fillText(line, x, lineY);
+                        line = words[n] + ' ';
+                        lineY += lineHeight;
+                    } else {
+                        line = testLine;
+                    }
+                }
+                context.fillText(line, x, lineY);
+                return lineY; // Devuelve la última posición Y utilizada
+            }
+
+            const handleSave = async () => {
+                if (!signerName.trim() || !signerRut.trim()) {
+                    showMessage("Por favor, complete el nombre y el RUT/Identificación.", 'red');
+                    return;
+                }
+                
+                const canvas = canvasRef.current;
+                if (!canvas || isCanvasBlank(canvas)) {
+                    showMessage("Por favor, firme en el recuadro antes de guardar.", 'red');
+                    return;
+                }
+
+                const signatureData = canvas.toDataURL('image/png'); // Firma en Base64
+                
+                setLoading(true);
+                showMessage("Guardando documento y generando descarga, por favor espere...", 'blue');
+
+                try {
+                    // 1. GUARDADO EN FIRESTORE (Solo si la DB está lista)
+                    if (isDbReady) {
+                        const contractData = {
+                            signerName: signerName.trim(),
+                            signerRut: signerRut.trim(),
+                            signedAt: new Date().toISOString(),
+                            contractText: contractText,
+                            signatureData: signatureData, // Base64 de la imagen de firma
+                            userId: userId,
+                            appId: appId
+                        };
+                        // Usamos la sintaxis V8 correcta
+                        const docRef = await db.collection(CONTRACTS_COLLECTION_PATH).add(contractData);
+                        showMessage(`¡Contrato guardado (ID: ${docRef.id})! Generando descarga...`, 'green', 5000);
+                    } else {
+                        showMessage("Advertencia: Base de datos no disponible. Solo se generará la descarga.", 'yellow', 5000);
+                    }
+                    
+                    // 2. GENERACIÓN Y DESCARGA DEL PNG
+                    const name = signerName.trim();
+                    const rut = signerRut.trim();
+
+                    const docCanvas = document.createElement('canvas');
+                    docCanvas.width = 1000;
+                    docCanvas.height = 1200; 
+                    const docCtx = docCanvas.getContext('2d');
+                    docCtx.fillStyle = '#ffffff';
+                    docCtx.fillRect(0, 0, docCanvas.width, docCanvas.height);
+                    docCtx.font = '28px Inter, sans-serif';
+                    docCtx.fillStyle = '#000000';
+                    
+                    // Título y Metadata
+                    docCtx.fillText('ANEXO DE CONTRATO FIRMADO', 50, 50);
+                    docCtx.font = '16px Inter, sans-serif';
+                    docCtx.fillText(`Firmante: ${name}`, 50, 90);
+                    docCtx.fillText(`RUT/ID: ${rut}`, 50, 115);
+                    docCtx.fillText(`Fecha de Firma: ${new Date().toLocaleString('es-CL')}`, 50, 140);
+                    
+                    // Contenido del Contrato
+                    docCtx.font = '14px Inter, sans-serif';
+                    const textToDraw = contractText
+                        .replace('[NOMBRE DEL FIRMANTE]', name)
+                        .replace('[RUT DEL FIRMANTE]', rut);
+
+                    // La función wrapText devuelve la última posición Y
+                    let lastY = wrapText(docCtx, textToDraw, 50, 180, docCanvas.width - 100, 20);
+
+                    // Agregar la Firma Capturada
+                    const signatureImg = new Image();
+                    signatureImg.onload = () => {
+                        const startY = lastY + 50; 
+                        
+                        docCtx.font = '18px Inter, sans-serif';
+                        docCtx.fillText('FIRMA DIGITAL CAPTURADA', 50, startY);
+
+                        // Dibuja la firma del canvas original
+                        const signatureCanvasWidth = 400; // Tamaño fijo para la imagen en el documento
+                        const signatureCanvasHeight = 150;
+                        docCtx.drawImage(signatureImg, 50, startY + 20, signatureCanvasWidth, signatureCanvasHeight);
+                        
+                        docCtx.font = '14px Inter, sans-serif';
+                        docCtx.fillText('_________________________', 50, startY + 20 + signatureCanvasHeight + 10);
+                        docCtx.fillText(name, 50, startY + 20 + signatureCanvasHeight + 30);
+                        docCtx.fillText(`RUT ${rut}`, 50, startY + 20 + signatureCanvasHeight + 50);
+
+                        // Descargar el documento final
+                        const link = document.createElement('a');
+                        link.download = `Contrato_Firmado_${name.replace(/\s/g, '_')}_${Date.now()}.png`;
+                        link.href = docCanvas.toDataURL('image/png');
+                        document.body.appendChild(link);
+                        link.click();
+                        document.body.removeChild(link);
+
+                        // Resetea el formulario y el canvas
+                        setSignerName('');
+                        setSignerRut('');
+                        handleClear();
+                        
+                        setLoading(false);
+                    };
+                    signatureImg.src = signatureData;
+
+                } catch (error) {
+                    console.error("Error al guardar o descargar el documento:", error);
+                    showMessage(`Error al procesar: ${error.message}`, 'red', 10000);
+                    setLoading(false);
+                }
+            };
+
+            const MessageComponent = message && (
+                <div className={`mt-4 p-3 rounded-lg text-sm font-medium transition duration-300 border 
+                    ${message.type === 'green' ? 'bg-green-100 text-green-800 border-green-300' : 
+                     message.type === 'red' ? 'bg-red-100 text-red-800 border-red-300' : 
+                     message.type === 'yellow' ? 'bg-yellow-100 text-yellow-800 border-yellow-300' :
+                     'bg-blue-100 text-blue-800 border-blue-300'}`}
+                >
+                    {message.text}
+                </div>
+            );
+            
+            // Contenido del contrato con placeholders reemplazados (para la vista)
+            const displayContractText = contractText
+                .replace('[NOMBRE DEL FIRMANTE]', signerName || '__________________')
+                .replace('[RUT DEL FIRMANTE]', signerRut || '__________________');
+
+
+            return (
+                <div className="max-w-4xl mx-auto bg-white p-6 sm:p-8 rounded-xl shadow-2xl border border-gray-100">
+                    
+                    <header className="text-center mb-8">
+                        <h1 className="text-3xl font-bold text-gray-800">Sistema de Firma: Guardado Centralizado y Descarga</h1>
+                        <p className="text-gray-500 mt-2">Los documentos firmados se guardan automáticamente en la base de datos Y se descargan para el firmante.</p>
+                        {MessageComponent}
+                        {userId && <p className="text-xs text-gray-400 mt-2">ID de Sesión: {userId}</p>}
+                        
+                        {loading && (
+                            <div className="flex justify-center items-center mt-4">
+                                <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-500"></div>
+                                <span className="ml-3 text-blue-600">Procesando...</span>
+                            </div>
+                        )}
+                    </header>
+
+                    {/* Contenedor del Contrato */}
+                    <div className="mb-8">
+                        <h2 className="text-xl font-semibold mb-3 text-gray-700">1. Contenido del Documento</h2>
+                        <div className="contract-content rounded-lg p-4 bg-gray-50 text-justify text-sm leading-relaxed max-h-60 overflow-y-auto">
+                            <pre className="text-sm text-gray-800 leading-relaxed font-sans">{displayContractText}</pre>
+                        </div>
+                    </div>
+
+                    {/* Sección de Datos y Firma */}
+                    <div className="mb-8 p-4 bg-blue-50 rounded-xl border border-blue-200">
+                        <h2 className="text-xl font-semibold mb-4 text-blue-700">2. Complete y Firme</h2>
+                        
+                        {/* Campos a Llenar */}
+                        <div className="flex flex-col md:flex-row gap-4 mb-6">
+                            <input 
+                                type="text" 
+                                id="signerName" 
+                                placeholder="Nombre completo del firmante (Obligatorio)" 
+                                value={signerName}
+                                onChange={(e) => setSignerName(e.target.value)}
+                                className="flex-grow p-3 border border-gray-300 rounded-lg focus:ring-blue-500 focus:border-blue-500 text-sm" 
+                                required 
+                                disabled={loading}
+                            />
+                            <input 
+                                type="text" 
+                                id="signerRut" 
+                                placeholder="RUT/Identificación (Obligatorio)" 
+                                value={signerRut}
+                                onChange={(e) => setSignerRut(e.target.value)}
+                                className="flex-grow p-3 border border-gray-300 rounded-lg focus:ring-blue-500 focus:border-blue-500 text-sm"
+                                required 
+                                disabled={loading}
+                            />
+                        </div>
+                        
+                        {/* Canvas de Firma */}
+                        <p className="text-sm text-gray-600 mt-4 mb-2">3. Use el mouse o el dedo para firmar dentro del recuadro:</p>
+                        <canvas 
+                            ref={canvasRef} 
+                            id="signatureCanvas" 
+                            width="800"
+                            height="150"
+                            className="w-full rounded-lg shadow-inner"
+                            onMouseDown={handleStart}
+                            onMouseMove={handleMove}
+                            onMouseUp={handleEnd}
+                            onMouseOut={handleEnd}
+                            onTouchStart={handleStart}
+                            onTouchMove={handleMove}
+                            onTouchEnd={handleEnd}
+                            onTouchCancel={handleEnd}
+                        />
+                        
+                        {/* Botones */}
+                        <div className="mt-6 flex flex-col sm:flex-row justify-between gap-3">
+                            <button 
+                                onClick={handleClear} 
+                                className="flex-1 bg-red-500 hover:bg-red-600 text-white font-semibold py-3 px-4 rounded-xl transition duration-150 shadow-md hover:shadow-lg disabled:opacity-50"
+                                disabled={loading}
+                            >
+                                Limpiar Firma
+                            </button>
+                            <button 
+                                onClick={handleSave} 
+                                className="flex-1 bg-green-500 hover:bg-green-600 text-white font-semibold py-3 px-4 rounded-xl transition duration-150 shadow-md hover:shadow-lg disabled:bg-gray-400"
+                                disabled={loading || !signerName || !signerRut}
+                            >
+                                Guardar y Descargar Contrato Firmado (PNG)
+                            </button>
+                        </div>
+                    </div>
+
+                    <!-- Instrucciones y advertencia -->
+                    <div className="text-center text-sm text-gray-500 mt-6 p-4 border-t">
+                        <p className="font-bold text-red-600 mt-2">ADVERTENCIA LEGAL:</p>
+                        <p>Esta solución guarda la información y la imagen de la firma en su base de datos (Firestore). Sin embargo, **NO utiliza Firma Electrónica Avanzada** y puede no ser legalmente vinculante para todos los propósitos. Consulte a un abogado si la validez legal estricta es obligatoria.</p>
+                        <p className="mt-2">Datos guardados en Firestore en la colección: <code>{CONTRACTS_COLLECTION_PATH}</code></p>
+                    </div>
+                </div>
+            );
+        };
+
+        // Carga la aplicación React en el elemento con id="root"
+        const container = document.getElementById('root');
+        if (container) {
+            ReactDOM.render(<App />, container);
+        }
+    </script>
+</body>
+</html>
